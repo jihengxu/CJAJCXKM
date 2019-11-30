@@ -1,0 +1,169 @@
+# setting covariance matrix
+library(MASS)
+library(glmnet)
+library(ggplot2)
+library(Rmisc)
+
+# generate B
+p=15
+B=matrix(0,nrow=p,ncol=p)
+for(i in 1:p){
+  for(j in i:p){
+    if(i==j)
+      B[i,j]=0
+    else{
+      prob=runif(1,0,1)
+      if(prob<=0.1)
+        B[i,j]=0.5
+    }
+  }
+}
+for(j in 1:p){
+  for(i in j:p){
+    B[i,j]=B[j,i]
+  }
+}
+
+# generate sigma matrix (covariance matrix) and X
+delta=2
+miu=integer(p)
+sigma=B+delta*diag(p)
+sigma_1=solve(sigma)
+x=mvrnorm(n=1000,miu,sigma_1)
+
+# apply lasso approach (optimal lambda)
+set.seed(520)
+Beta=matrix(0,nrow=p,ncol=p)
+for(j in 1:p){
+  cv.lasso=cv.glmnet(x[,-j],x[,j]) # choosing optimal lambda
+  model.lasso=glmnet(x[,-j],x[,j],family="gaussian",
+                     alpha=1,lambda=cv.lasso$lambda.min,standardize=TRUE)
+  coef(model.lasso)
+  # still need to demean
+  for(count in 1:p){
+    if(count<j){
+      Beta[count,j]=model.lasso$beta[count]
+    }
+    else if(count==j){
+        Beta[count,j]=0
+    }
+        else Beta[count,j]=model.lasso$beta[count-1]
+  }
+}
+Beta
+sigma_1
+
+###### the loop of lamda
+# now need to change the value of lambda
+TPR_1=TPR_2=FPR_1=FPR_2=0
+
+# calculate E matrix of real matrix
+E_sigma=matrix(0,ncol=p,nrow=p)
+for(i in 1:p){
+  for(j in 1:p){
+    if(sigma_1[i,j]!=0){
+      E_sigma[i,j]=1
+    }
+  }
+}
+E_sigma
+
+for(n in 1:1000){
+  lambda[n]=0.0001*n
+  Beta=matrix(0,nrow=p,ncol=p)
+  for(j in 1:p){
+    model.lasso=glmnet(x[,-j],x[,j]-mean(x[,j]),family="gaussian",
+                       alpha=1,lambda=lambda[n],standardize=TRUE)
+    coef(model.lasso)
+    # remember to check the demean method
+    for(count in 1:p){
+      if(count<j){
+        Beta[count,j]=model.lasso$beta[count]
+      }
+      else if(count==j){
+        Beta[count,j]=0
+      }
+      else Beta[count,j]=model.lasso$beta[count-1]
+    }
+  }
+
+# consider node-wise lasso 1 and 2
+
+E1_beta=matrix(0,ncol=p,nrow=p)
+E2_beta=matrix(0,ncol=p,nrow=p)
+for(i in 1:p){
+  for(j in 1:p){
+    if(Beta[i,j]!=0&&Beta[j,i]!=0){
+      E1_beta[i,j]=E1_beta[j,i]=1
+    }
+    if(Beta[i,j]!=0||Beta[j,i]!=0){
+      E2_beta[i,j]=E2_beta[j,i]=1
+    }
+  }
+}
+E1_beta
+E2_beta
+
+
+# calculate the TPR and FRR
+TP=c(0,0)
+FN=c(0,0)
+FP=c(0,0)
+TN=c(0,0)
+
+# only consider half of the matrix because of undirected network
+for(i in 1:p){
+    for(j in i:p){
+      if(i!=j){
+        if(E_sigma[i,j]==0&&E1_beta==0){ 
+          TN[1]=TN[1]+1
+        }
+        else if(E_sigma[i,j]==0&&E1_beta[i,j]!=0){
+          FP[1]=FP[1]+1
+        }
+        else if(E_sigma[i,j]!=0&&E1_beta[i,j]!=0){
+          TP[1]=TP[1]+1
+        }
+        else if(E_sigma[i,j]!=0&&E1_beta[i,j]==0){
+          FN[1]=FN[1]+1
+        }
+      }
+    }
+}
+
+for(i in 1:p){
+  for(j in i:p){
+    if(i!=j){
+      if(E_sigma[i,j]==0&&E2_beta==0){ 
+        TN[2]=TN[2]+1
+      }
+      else if(E_sigma[i,j]==0&&E2_beta[i,j]!=0){
+        FP[2]=FP[2]+1
+      }
+      else if(E_sigma[i,j]!=0&&E2_beta[i,j]!=0){
+        TP[2]=TP[2]+1
+      }
+      else if(E_sigma[i,j]!=0&&E2_beta[i,j]==0){
+        FN[2]=FN[2]+1
+      }
+    }
+  }
+}
+TPR_1[n]=TP[1]/(TP[1]+FN[1])
+FPR_1[n]=FP[1]/(FP[1]+TN[1])
+TPR_2[n]=TP[2]/(TP[2]+FN[2])
+FPR_2[n]=FP[2]/(FP[2]+TN[2])
+}
+
+
+# draw a plot of TPR and FPR
+a_list=list(lambda,TPR_1,FPR_1,TPR_2,FPR_2)
+names(a_list)=c("lambda","TPR1","FPR1","TPR2","FPR2")
+do.call(cbind,lapply((a_list),'length<-',max(lengths(a_list))))
+a_data=data.frame(a_list)
+
+tpr1_plot=ggplot(a_data,aes(x=lambda,y=TPR_1))+geom_point(size=2,shape=21)
+fpr1_plot=ggplot(a_data,aes(x=lambda,y=FPR_1))+geom_point(size=2,shape=21)
+tpr2_plot=ggplot(a_data,aes(x=lambda,y=TPR_2))+geom_point(size=2,shape=21)
+fpr2_plot=ggplot(a_data,aes(x=lambda,y=FPR_2))+geom_point(size=2,shape=21)
+multiplot(tpr1_plot,fpr1_plot,tpr2_plot,fpr2_plot,cols=2)
